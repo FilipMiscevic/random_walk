@@ -2,23 +2,216 @@ from animals import *
 from generate_animal_graphs import *
 from numpy.random import seed,choice
 import random
-from core.graph_tool_igraph import *
+#from core.graph_tool_igraph import *
+from igraph import *
 from itertools import groupby
 import itertools
-import pylab,scipy,numpy
-import csv
-import re
+import pylab,scipy
+import csv,re
+import os
+from mpl_toolkits.mplot3d import Axes3D,proj3d
+from matplotlib import cm,markers
+from matplotlib.ticker import LinearLocator, FormatStrFormatter
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.interpolate import griddata
+from matplotlib._png import read_png
+from matplotlib.offsetbox import AnnotationBbox, OffsetImage
+from clustering import *
+from plotting import *
 
-##functions adapted from https://github.com/AusterweilLab/randomwalk
-def random_walk(g,start=None,seed=None,weighted=False,stop=None,restart=0):
-    #seed(seed)
+#suppress figure generation until plt.show() called
+plt.ioff()
+
+#number of iterations of random walks to average per experiment
+ITR = 282
+
+
+def mean(a):
+    '''List -> float
+       float -> float
+    Return the average of a list of numbers, excluding None values. If a is a number, return a.
+    '''
+    if type(a) is float or type(a) is int:
+        return a
+    return np.mean([i for i in a if i != None])
+
+
+def a_len(a):
+    '''List -> int
+    Return the length of a list excluding None values.
+    '''
+    return len([i for i in a if i != None])
+
+
+####################
+### RANDOM WALKS ###
+####################
+
+def random_walk_possible(g):
+    '''For a given graph g, determine if a random walk starting at 'animal:N' is possible.
+    Criteria: 'animal:N' exists and has neighbors.
+    '''
+    start = 'animal:N'
     
+    g = get_cluster(g,start)
+    if g == None:
+        return False
+        #return a,b,cat,title, full_paths,full_cats
+    elif len(g.neighbors(g.vs.find(label=start).index)) == 0:
+        return False
+    
+    return True
+    
+
+def random_walk_trial(g,m,weight_opt,walk_length,restart=None):
+    '''Wrapper function to conduct a random walk as many times as ITR.'''
+    #if animal not in network or connected to anything, skip
+    '''
+    start = 'animal:N'
+    
+    g = g.get_cluster(start)
+    if g == None:
+        return None
+        #return a,b,cat,title, full_paths,full_cats
+    elif len(g.neighbors(g.vs.find(label=start).index)) == 0:
+        return None
+        #return a,b,cat,title, full_paths,full_cats
+    '''
+    
+    #print "test " + str(g)
+    b=[]
+    cat=[]
+    a=[]    
+    
+    full_cats = []
+    full_paths = []
+    
+    title = "_".join([m,str(weight_opt),str(ITR),str(walk_length),'restart '+str(restart) if restart else ''])
+
+    for i in range(0,ITR):
+        
+        b_i,c_i,a_i,f_p,c_f = gen_random_walk(g=g,weighted=weight_opt,log_file=title,stop=walk_length,restart=restart,name=title)
+        
+        b.append(b_i)
+        cat.append(c_i)
+        a.append(a_i)
+        
+        full_cats.append(c_f)
+        full_paths.append(f_p)
+        
+    #log the trial
+    #write_summary(title,a,cat,walk_length)
+    #precision_recall(g,title)
+        
+    return a,b,cat,title, full_paths,full_cats
+
+
+def get_walk_length(name):
+    '''Str -> int
+    Return the walk length for a particular graph.
+    '''
+    name=name.lower()
+    if 'gold_af' in name:
+        return 50
+    elif 'learner_af' in name:
+        return 95
+    elif 'beagle_shared' in name:
+        return 45
+    elif 'beagle' in name:
+        return 70
+
+def gen_random_walk(g,weighted=True, log_file='',itr=1,name='',stop=None,restart=0):
+    '''Perform a single random walk and determine the categories of each word.'''
+
+    start = 'animal:N'    
+    
+    g = get_cluster(g,start)
+    
+    a,rwalk,b = genX(g,s=start,use_irts=1,weighted=weighted,stop=stop,restart=restart)
+    
+    a_names = g.vs[a]['label']
+    #a_categories = [SHARED_HILLS_POS_CATEG_NUM.get(i,-1) for i in g.vs[a]['label']]
+    #a_cat_changed = [1 if a_categories[i-1] != a_categories[i] else 0 for i in range(1,len(a_categories))]
+    
+    
+    ##calculate whether category changes as per Abbott et al.
+    cat = get_fluid_cat_switches(a_names,start)
+                
+                
+    full_path = [g.vs['label'][rwalk[0][0]]] +  [g.vs['label'][z[1]] for z in rwalk]
+    
+    cat_full = get_fluid_cat_switches(full_path,start)
+    
+    ##LOG
+    '''
+    #append to logfile
+    if log_file:
+        with open(log_file + '.txt','a') as f:
+            lines = 'Walk #:' + 'Weighted: ' + str(weighted),'Full Path: [' + ', '.join(full_path) + ']\n'+'IRTS:'+str(b)+'\nWords: ' + str(a_names), 'Categ: ' + str(cat)
+            #print '\n'.join(lines)+'\n\n'
+            #print b
+            f.write('\n'.join(lines)+'\n\n')
+    '''
+            
+    #cats_altered = [c for i,c in zip(full_path,cat_full) if i
+            
+    return b,cat,a,full_path,cat_full
+
+
+def random_walk_am(g,start=None,seed=None,weighted=False,stop=None,restart=0):
+    '''Perform a random walk on adjacency matrix g.'''
+    #seed(seed)
+       
+    #if type(start) == str:
+    #    try:
+    #        start = g.vs.find(label=start).index
+    #    except Exception as e:
+    #        start=random.choice(range(g.vcount()))
+        
+    assert type(start) == int
+
+    walk=[]
+    unused_nodes=set(range(len(g)))
+    unused_nodes.remove(start)
+    s = start
+    count = 0
+    while len(unused_nodes) > 0:
+        _p=start            
+        neighbors = [i for i,jj in enumerate(g[start,:]) if jj != 0]
+        if weighted==False:
+            start=choice(neighbors) # follow random edge
+        else:
+            weights = g[start,neighbors]
+            #distances = g.es[neighboring_edges]['distance']
+            #weights = [1-i for i in distances]
+            total = np.sum(weights)
+            normalized_weights = np.divide(weights,total)
+            
+            start=choice(neighbors,p=normalized_weights)
+            
+        walk.append((_p,start))
+        if start in unused_nodes:
+            unused_nodes.remove(start)
+            
+        if restart:
+            if np.random.binomial(1,restart):
+                start = s 
+        if stop:
+            if count >= stop:
+                break
+
+        count +=1
+    return walk
+    
+def random_walk(g,start=None,seed=None,weighted=False,stop=None,restart=0):
+    '''Perform a random walk on graph g.'''
+    #seed(seed)
+       
     if type(start) == str:
         try:
             start = g.vs.find(label=start).index
         except Exception as e:
-            #pass
-    #if start is None:
             start=random.choice(range(g.vcount()))
         
     assert type(start) == int
@@ -44,30 +237,18 @@ def random_walk(g,start=None,seed=None,weighted=False,stop=None,restart=0):
         walk.append((_p,start))
         if start in unused_nodes:
             unused_nodes.remove(start)
-            #if restart:
-                #if numpy.random.binomial(1,0.05):
-                    #start = s           
+            
         if restart:
-            if numpy.random.binomial(1,restart):
+            if np.random.binomial(1,restart):
                 start = s 
         if stop:
             if count >= stop:
                 break
 
-        
         count +=1
-        
-            
     return walk
 
-# generates fake IRTs from # of steps in a random walk, using gamma distribution
-def stepsToIRT(irts, beta=1, seed=None):
-    np.random.seed(seed)
-    new_irts=[]
-    for irtlist in irts:
-        newlist=[np.random.gamma(irt, beta) for irt in irtlist]
-        new_irts.append(newlist)
-    return new_irts
+## Random walk methods modified from https://github.com/AusterweilLab/randomwalk
 
 # first hitting times for each node
 def firstHits(walk):
@@ -102,45 +283,20 @@ def genX(g,s=None,use_irts=0,seed=None,weighted=False,stop=None,restart=0):
     Xs=observed_walk(rwalk)
     
     if use_irts==0: 
-        return Xs
+        return Xs,rwalk
     else:
         fh=list(zip(*firstHits(rwalk))[1])
         irts=[fh[i]-fh[i-1] for i in range(1,len(fh))]
-        return Xs, irts
-    
-def get_cluster(g,vertex):
-    '''Return a subgraph containing the cluster to which vertex v belongs.'''
-    vertex = g.vs.find(label=vertex).index if type(vertex)==str else vertex
-    
-    vertices = [l for l in g.clusters() if vertex in l]
-    
-    return g.subgraph(vertices[0])
+        return Xs,rwalk,irts
 
-def in_same_cluster(g,v,w):
-    '''Determine whether two vertices in a graph belong to the same cluster.'''
-    v = g.vs.find(label=v).index if type(v)==str else v    
-    w = g.vs.find(label=w).index if type(w)==str else w
 
-    v_clust = [l for l in g.clusters() if v in l]
-    
-    w_in_v_clust = [m for m in v_clust if w in m]
-    
-    return bool(w_in_v_clust)
+#####################################
+### DETERMINING CATEGORY SWITCHES ###
+#####################################
 
-def gen_random_walk(g,weighted=True, log_file='',itr=1,name='',stop=None,restart=0):
 
-    start = 'animal:N'    
-    
-    g = get_cluster(g,start)
-    
-    a,b = genX(g,s=start,use_irts=1,weighted=weighted,stop=stop,restart=restart)
-    
-    a_names = g.vs[a]['label']
-    #a_categories = [SHARED_HILLS_POS_CATEG_NUM.get(i,-1) for i in g.vs[a]['label']]
-    #a_cat_changed = [1 if a_categories[i-1] != a_categories[i] else 0 for i in range(1,len(a_categories))]
-    
-    
-    ##calculate whether category changes as per Abbott et al.
+def get_fluid_cat_switches(a_names,start):
+    ##calculate whether category changes as per Abbott et al.: i.e., category switch only when next word has no categories in common with previous word.
     j = 0
     cat=[]
     #cat_names=[]
@@ -153,7 +309,7 @@ def gen_random_walk(g,weighted=True, log_file='',itr=1,name='',stop=None,restart
             s = A_NAME.get(n)
             t = A_NAME.get(a_names[i-1])
             if s == None or t == None:
-                if n == 'animal:N' or a_names[i-1] == 'animal:N' or n == 'billy_goat:N' or a_names[i-1] == 'billy_goat:N':
+                if n == 'animal:N' or a_names[i-1] == 'animal:N': #or n == 'billy_goat:N' or a_names[i-1] == 'billy_goat:N':
                     cat.append(j)
                     continue
                 cat.append(None)
@@ -165,75 +321,14 @@ def gen_random_walk(g,weighted=True, log_file='',itr=1,name='',stop=None,restart
                 #cat_names.append
             else:
                 cat.append(j)
-    
-    #append to logfile
-    if log_file:
-        with open(log_file + '.txt','a') as f:
-            lines = 'Weighted: ' + str(weighted),'Name: ' + name, 'Path: ' + str(a_names), 'Categ: ' + str(cat)
-            #print '\n'.join(lines)+'\n\n'
-            #print b
-            f.write('\n'.join(lines)+'\n\n')
-            
-    return b,cat,a
+    return cat
 
-def precision_recall(graph,title='',n='precision_recall'):
-    try:
-        graph = graph.copy()
-        graph.remove_vertex(graph.vs.find(label='animal:N'))
-    except Exception as e:
-        pass
-    
-    precision = {}
-    recall = {}
-    
-    for cluster in graph.clusters():
-        fp = float(0)
-        fn = float(0)
-        tp = float(0)
-        cluster_categories = {}
-        names = []
-        for vid in cluster:
-            name = graph.vs[vid]['label']
-            names.append(name)
-            for s in A_NAME[name]:
-                if cluster_categories.get(s) == None:
-                    cluster_categories[s] = 1
-                else:
-                    cluster_categories[s] += 1
-        
-        #cluster label is most frequently occurring category in the cluster
-        cluster_category = max([(value, key) for key, value in cluster_categories.items()])[1]
-        
-        for vid in cluster:
-            name = graph.vs[vid]['label']
- 
-            if cluster_category in A_NAME[name]:
-                tp += 1
-            else:
-                fp += 1
-        
-        for animal in [key for key, value in A_NAME.items() if cluster_category in value and key in names]:
-            if animal not in names:
-                fn += 1
-                
-        #print tp,fp,fn
-                
-        precision[cluster_category] = float(tp/(tp+fp))
-        recall[cluster_category] = float(tp/(tp+fn))    
-        
-    with open(n+'.txt','a') as f:
-        f.write('Name: {}\n'.format(title))
-        f.write('Precision: \n')
-        for key,value in precision.items():
-            f.write('        {}: {}\n'.format(key,value))
-        f.write('\nRecall: \n')
-        for key,value in recall.items():
-            f.write('        {}: {}\n'.format(key,value))        
+######################
+### CALCULATE IRTs ###
+######################
 
-    return precision,recall
-                
 def create_irt_graph(b,cat,multi=False):
-    '''get patch entry pos'''
+    '''Determine the IRT for patch entry positions normalized to the average long-term IRT within one trial.'''
     orders = []
     
     n = []
@@ -273,7 +368,6 @@ def create_irt_graph(b,cat,multi=False):
             #orders += [n,p]
             #irts += b[q]
     else:      
-    
         neg_order = []
         pos_order = []
         
@@ -321,8 +415,9 @@ def create_irt_graph(b,cat,multi=False):
        
     return binned_final,binned_sem
 
-def irt_self_longterm_avg(b,cat,multi=False):
-    '''get patch entry pos'''
+
+def irt_self_longterm_avg(b,cat,multi=True):
+    '''Determine IRTs for each patch entry positions using fluid categories normalized to the long-term average IRT accross all trials in the experiment.'''
     orders = []
     
     n = []
@@ -341,9 +436,10 @@ def irt_self_longterm_avg(b,cat,multi=False):
             
             for j,kk in enumerate(w):
                 
-                if kk >= w[len(w)-1]:
+                if kk >= max(w):
                     to_next=0
-                #elif kk == None:
+                elif kk == None:
+                    continue
                     #print 'Error: list index'
                 else:
                     next_cat = w.index(kk+1)             
@@ -359,8 +455,7 @@ def irt_self_longterm_avg(b,cat,multi=False):
                 
             n.append(neg_order)
             p.append(pos_order)
-            #orders += [n,p]
-            #irts += b[q]
+
     else:      
     
         neg_order = []
@@ -390,6 +485,7 @@ def irt_self_longterm_avg(b,cat,multi=False):
 
     orders = [n,p]
     
+    
     for g in orders:
         for s,order in enumerate(g):
             ind_mean = mean(b[s])
@@ -411,430 +507,140 @@ def irt_self_longterm_avg(b,cat,multi=False):
         binned_sem[key] = scipy.stats.sem(binned_sem[key])
 
     return binned_final,binned_sem
-
-def calc_small_worldness(graph,name,filename="graphstats"):
-    #avg_c, median_sp = self.calc_graph_stats(graph, filename)
-    graph = get_cluster(graph,'animal:N')
-
-    #global rand_graph
-    rand_graph = graph.copy()
-    rand_graph.rewire_edges(0.5) #Graph.Erdos_Renyi(graph.vcount(),m=graph.ecount())
-    rand_graph.es['distance']=graph.es['distance']
-    #rand_graph.vs[
-    #rejection_count = random_rewire(rand_graph, "erdos")
-    #print "rejection count", rejection_count
-    
-    
-    ##graph_paths = graph.shortest_paths_dijkstra()
-    ##rand_paths = rand_graph.shortest_path_dikkstra()
-    avg_c = graph.transitivity_avglocal_undirected()
-    rand_avg_c = rand_graph.transitivity_avglocal_undirected()
-    
-    avg_sp = graph.average_path_length()
-    rand_avg_sp = rand_graph.average_path_length()
-
-    #rand_avg_c, rand_median_sp = self.calc_graph_stats(rand_graph, filename)
-
-    with open(filename + ".txt", 'a') as stat_file:
-        stat_file.write("number of nodes:"+ str(graph.vcount()) + "\nnumber of edges:" + str(graph.ecount()) + "\n")
-        #stat_file.write("avg total degree:" + "%.2f +/- %.2f" % avg_total_degree  + "\n")
-        #stat_file.write("sparsity:" + "%.2f" % (avg_total_degree[0] / float(nodes_num))  + "\n")
-    
-        #stat_file.write("number of nodes in LLC:"+  str(lc_graph.num_vertices()) + "\nnumber of edges in LLC:" + str(lc_graph.num_edges()) + "\n")
-        #stat_file.write("connectedness:" + "%.2f" % (lc_graph.num_vertices()/float(nodes_num)) + "\n")
-        #stat_file.write("avg distance in LCC:" + "%.2f +/- %.2f" % (np.mean(dist_list), np.std(dist_list)) + "\n\n")
-    
-        stat_file.write("avg local clustering coefficient:" + "%.2f +/- %.2f" % avg_c + "\n")
-        #stat_file.write("median distnace in graph:" + "%.2f" % median_sp + "\n\n")        
-        stat_file.write(name+'\n')
-        stat_file.write("small-worldness %.3f" % ((avg_c / rand_avg_c)/(float(avg_sp)/rand_avg_sp)) + "\n\n")
-    
-def calc_small_worldness_orig(self, graph, filename):
-    avg_c, median_sp = self.calc_graph_stats(graph, filename)
-
-    rand_graph = Graph(graph)
-    rejection_count = random_rewire(rand_graph, "erdos")
-    print "rejection count", rejection_count
-    rand_avg_c, rand_median_sp = self.calc_graph_stats(rand_graph, filename)
-
-    stat_file = open(filename + ".txt", 'a')
-    stat_file.write("small-worldness %.3f" % ((avg_c / rand_avg_c)/(float(median_sp)/rand_median_sp)) + "\n\n")
-    stat_file.close()
-    
-def calc_graph_stats(graph,filename):
-    """ calc graph stats """
-
-    """Average Local Clustering Coefficient"""
-    #local_clust_co = local_clustering(graph)
-    #avg_local_clust = vertex_average(graph, local_clust_co)
-    avg_local_clust = graph.transitivity_avglocal_undirected()
-
-    """Average Degree (sparsity)"""
-    #avg_total_degree = vertex_average(graph, "total")
-    avg_total_degree = graph.knn()
-
-    nodes_num = graph.num_vertices()
-    edges_num = graph.num_edges()
-
-    """ Largest Component of the Graph"""
-    #lc_labels = label_largest_component(graph)
-
-    #lc_graph = Graph(graph)
-    #lc_graph.set_vertex_filter(lc_labels)
-    #lc_graph.purge_vertices()
-    lc_graph = graph.clusters(mode='weak').giant()
-
-    """Average Shortest Path in LCC"""
-    #lc_distances = lc_graph.edge_properties["distance"]
-    lc_distances = lc_graph.es["distance"]
-    
-    #dist = shortest_distance(lc_graph)#, weights=lc_distances) #TODO
-    dist = lc_graph.shortest_paths_dijkstra()
-    dist_list = []
-    for v in lc_graph.vertices():
-        #dist_list += list(dist[v].a)
-        dist_list += list(dist[v.index])
-
-
-    """ Median Shortest Path """
-    #distances = graph.edge_properties["distance"] #TODO
-    distances = graph.es['distance']
-    #gdist = shortest_distance(graph)#, weights=distances)
-    gdist = graph.shortest_paths_dijkstra()
-    
-    graph_dists = []
-    counter = 0
-    for v in graph.vertices():
-        #for othv in gdist[v].a:
-        for othv in gdist[v.index]:
-            if othv != 0.0: # not to include the distance to the node
-                graph_dists.append(othv)
-            else:
-                counter +=1
-  #  print "num v", graph.num_vertices(), counter
-    median_sp = np.median(graph_dists)
-  #  print "median", median_sp#, graph_dists
-
-
-    stat_file = open(filename + ".txt", 'a')
-    stat_file.write("number of nodes:"+ str(nodes_num) + "\nnumber of edges:" + str(edges_num) + "\n")
-    stat_file.write("avg total degree:" + "%.2f +/- %.2f" % avg_total_degree  + "\n")
-    stat_file.write("sparsity:" + "%.2f" % (avg_total_degree[0] / float(nodes_num))  + "\n")
-
-    stat_file.write("number of nodes in LLC:"+  str(lc_graph.num_vertices()) + "\nnumber of edges in LLC:" + str(lc_graph.num_edges()) + "\n")
-    stat_file.write("connectedness:" + "%.2f" % (lc_graph.num_vertices()/float(nodes_num)) + "\n")
-    stat_file.write("avg distance in LCC:" + "%.2f +/- %.2f" % (np.mean(dist_list), np.std(dist_list)) + "\n\n")
-
-    stat_file.write("avg local clustering coefficient:" + "%.2f +/- %.2f" % avg_local_clust + "\n")
-    stat_file.write("median distnace in graph:" + "%.2f" % median_sp + "\n\n")
-    
-    stat_file.close()
-
-    return avg_local_clust[0], median_sp    
-
-def calc_graph_stats_orig(graph, filename):
-    """ calc graph stats """
-
-    """Average Local Clustering Coefficient"""
-    #local_clust_co = local_clustering(graph)
-    #avg_local_clust = vertex_average(graph, local_clust_co)
-    avg_local_clust = graph.transitivity_avglocal_undirected()
-
-    """Average Degree (sparsity)"""
-    #avg_total_degree = vertex_average(graph, "total")
-    avg_total_degree = graph.knn()
-
-    nodes_num = graph.num_vertices()
-    edges_num = graph.num_edges()
-
-    """ Largest Component of the Graph"""
-    #lc_labels = label_largest_component(graph)
-
-    #lc_graph = Graph(graph)
-    #lc_graph.set_vertex_filter(lc_labels)
-    #lc_graph.purge_vertices()
-    lc_graph = graph.clusters(mode='weak').giant()
-
-    """Average Shortest Path in LCC"""
-    #lc_distances = lc_graph.edge_properties["distance"]
-    lc_distances = lc_graph.es["distance"]
-    
-    #dist = shortest_distance(lc_graph)#, weights=lc_distances) #TODO
-    dist = lc_graph.shortest_paths_dijkstra()
-    dist_list = []
-    for v in lc_graph.vertices():
-        #dist_list += list(dist[v].a)
-        dist_list += list(dist[v.index])
-
-
-    """ Median Shortest Path """
-    #distances = graph.edge_properties["distance"] #TODO
-    distances = graph.es['distance']
-    #gdist = shortest_distance(graph)#, weights=distances)
-    gdist = graph.shortest_paths_dijkstra()
-    
-    graph_dists = []
-    counter = 0
-    for v in graph.vertices():
-        #for othv in gdist[v].a:
-        for othv in gdist[v.index]:
-            if othv != 0.0: # not to include the distance to the node
-                graph_dists.append(othv)
-            else:
-                counter +=1
-  #  print "num v", graph.num_vertices(), counter
-    median_sp = np.median(graph_dists)
-  #  print "median", median_sp#, graph_dists
-
-
-    stat_file = open(filename + ".txt", 'a')
-    stat_file.write("number of nodes:"+ str(nodes_num) + "\nnumber of edges:" + str(edges_num) + "\n")
-    stat_file.write("avg total degree:" + "%.2f +/- %.2f" % avg_total_degree  + "\n")
-    stat_file.write("sparsity:" + "%.2f" % (avg_total_degree[0] / float(nodes_num))  + "\n")
-
-    stat_file.write("number of nodes in LLC:"+  str(lc_graph.num_vertices()) + "\nnumber of edges in LLC:" + str(lc_graph.num_edges()) + "\n")
-    stat_file.write("connectedness:" + "%.2f" % (lc_graph.num_vertices()/float(nodes_num)) + "\n")
-    stat_file.write("avg distance in LCC:" + "%.2f +/- %.2f" % (np.mean(dist_list), np.std(dist_list)) + "\n\n")
-
-    stat_file.write("avg local clustering coefficient:" + "%.2f +/- %.2f" % avg_local_clust + "\n")
-    stat_file.write("median distnace in graph:" + "%.2f" % median_sp + "\n\n")
-    
-    stat_file.close()
-
-    return avg_local_clust[0], median_sp
-
-def adjacency_names(graph,name='',n='graph_names'):
-    spaces = 12
-    
-    with open(n+'.txt','a') as f:
-        if name:
-            f.write('Name: {}\n'.format(name))
-            
-        for i in range(0,graph.vcount()):
-            node_name = graph.vs['label'][i]
-            
-            for q,neighbor in enumerate(graph.neighbors(i)):
-                if q == 0:
-                    f.write(node_name + ' '*(spaces-len(node_name)) + graph.vs['label'][neighbor])
-                    f.write('\n')
-                    
-                else:
-                    f.write(' '*spaces + graph.vs[neighbor]['label'] + '\n')
-            f.write('\n')
-            
-def count_occurences(g,corpus):
-    freq = {}
-    
-    #regex=[]
-    
-    for i in range(0,g.ecount()):
-        s = g.es[i].source
-        t = g.es[i].target
-        k = [g.vs['label'][s],g.vs['label'][t]]
-        k.sort()
-        #because tuples are hashable while lists are not
-        k = tuple(k)
-        
-        freq[k] = 0
-        
-    with open(corpus, 'rb') as f:
-        for line in f:
-            for key in freq.keys():
-                if key[0] in line and key[1] in line:
-                    freq[key] += 1
-            
-    return freq
-
-def compare_features(gold,learner,n='features.csv'):
-    with open(n, 'ab') as csvfile:
-        writer = csv.writer(csvfile, delimiter=',',
-                                quotechar="\"", quoting=csv.QUOTE_MINIMAL)
-        writer.writerow(['Word','Gold Features','Score','Learned Features','Score','COS sim'])    
-        
-        for word in SHARED_HILLS_POS_CATEG_NAMED:
-            lf = learner._learned_lexicon.meaning(word).sorted_features()
-            gf = gold.meaning(word).sorted_features()
-            sim = learner.acquisition_score(word)
-            for i in range(0,len(gf)):
-                gf_f =[gf[i][1],gf[i][0]] if i < len(gf) else ['','']
-                lf_f = [lf[i][1],lf[i][0]] if i < len(lf) else ['','']
-                writer.writerow([word if i==0 else '']+gf_f+lf_f+[sim if i==0 else ''])  
-                
-            writer.writerow([''])
-            
-def comparative_adjacency_csv(graph,gold_graph,counts,name='',n='graph_names.csv'):
-    with open(n, 'ab') as csvfile:
-        writer = csv.writer(csvfile, delimiter=',',
-                                quotechar="\"", quoting=csv.QUOTE_MINIMAL)
-        
-        writer.writerow(['Node','Name','Dist',name,'Name','Dist','Freq'])
-        for i in range(0,gold_graph.vcount()):
-            node_name = gold_graph.vs['label'][i]
-            
-            gg_nb = gold_graph.neighbors(i)
-            
-            if node_name not in graph.vs['label']:
-                for n,d in enumerate(gg_nb):
-                    if n == 0:
-                        writer.writerow([node_name, gold_graph.vs['label'][d] ])
-                    else:
-                        writer.writerow(['', gold_graph.vs['label'][d] ])
-            else:
-                g_nb = graph.neighbors(graph.vs.find(label=node_name).index)
-                
-                size = max(len(g_nb),len(gg_nb))
-                
-                for s in range(0,size):
-                    
-                    
-                    g=[]
-                    if s < len(g_nb):
-                        g = [graph.vs['label'][g_nb[s]],graph.es['distance'][graph.get_eid(g_nb[s],graph.vs.find(label=node_name).index)], counts[
-                            tuple(sorted(
-                                [graph.vs['label'][g_nb[s]],node_name]
-                             )) ] ]   
                         
-                    #gg=[]
-                    if s < len(gg_nb):
-                        gg = [gold_graph.vs['label'][gg_nb[s]],gold_graph.es['distance'][gold_graph.get_eid(gg_nb[s],gold_graph.vs.find(label=node_name).index)], '']
-                    else:
-                        gg = ['','','']
-                        
-                        
-                        
-                    
-                    if s == 0:
-                        writer.writerow([node_name]+gg+g)
-                    else:
-                        writer.writerow(['']+gg+g)
-                
-            '''
-            
-            if node_name in graph.vs['label']:
-            
-                if len(gold_graph.neighbors(i)) < len(graph.neighbors(graph.vs.find(label=node_name).index)):
-                    g=graph
-                else:
-                    g=gold_graph
-                for q in range(0,len(g.neighbors(i))):
-                    
-                    count = 0
-                    m2 = []
-
-                    if gold_graph.vs[g.neighbors(i)[q]]['label'] in graph.vs['label'] and q < len(graph.neighbors(graph.vs.find(label=node_name).index)):
-                       
-                        for line in open('data/animals.dev'):
-                            if re.findall(r'E: (?=.*{})(?=.*{})'.format(node_name,graph.vs['label'][graph.neighbors(graph.vs.find(label=node_name).index)[q]]),line) != []:
-                                if count == 0:
-                                    print re.findall(r'E: (?=.*{})(?=.*{})'.format(node_name,graph.vs['label'][graph.neighbors(graph.vs.find(label=node_name).index)[q]]),line)
-                                    print r'E: (?=.*{})(?=.*{})'.format(node_name,graph.vs['label'][graph.neighbors(graph.vs.find(label=node_name).index)[q]])
-                                count +=1
-                        m2 = [graph.vs['label'][graph.neighbors(graph.vs.find(label=node_name).index)[q]],graph.es['distance'][graph.get_eid(i,graph.neighbors(graph.vs.find(label=node_name).index)[q])], count]
-                        
-                    m1 = [gold_graph.vs['label'][gold_graph.neighbors(i)[q]],gold_graph.es['distance'][gold_graph.get_eid(i,gold_graph.neighbors(i)[q])] ] if q < len(gold_graph.neighbors(i)) else ['','']
-                    
-                    
-                    if q == 0:
-                        writer.writerow([node_name] + m1 + m2 )
-                    else:
-                        writer.writerow([''] + m1 + m2 )
-            else:
-
-                for qq,d in enumerate(gold_graph.neighbors(i)):
-                    
-                    if qq == 0:
-                        writer.writerow([node_name, gold_graph.vs['label'][d] ])
-                        #writer.writerow([''])                 
-                        #f.write('\n')
-                        
-                    else:
-                        writer.writerow(['', gold_graph.vs['label'][d] ])
-
-        writer.writerow([''])    '''             
-         
-                        
-def write_summary(title,a,c):
-    with open(title+'.txt','a') as l:
+def write_summary(title,a,c,itr):
+    with open(title+'_summary.txt','a') as l:
         l.write('\n----------------------------------\n')
         l.write('SUMMARY STATISTICS:')
         l.write('\n----------------------------------\n')   
-        avg_words = [mean(len(z)) for z in a]
+        avg_words = [mean(a_len(z)) for z in c]
         avg_patch_switch = [q[-1:][0] for q in c]
         avg_itm_ptch = [mean([len(list(group)) for key, group in groupby(m)]) for m in c]
-        l.write('Avg words: {}, SEM {}\n'.format(mean(avg_words),scipy.stats.sem(avg_words)))
-        l.write('Avg patch switches: {}, SEM {} \n'.format(mean(avg_patch_switch),scipy.stats.sem(avg_patch_switch)))
-        l.write('Avg itms/patch: {}, SEM {}\n'.format(mean(avg_itm_ptch),scipy.stats.sem(avg_itm_ptch)))    
-            
-if __name__ == "__main__":
-    if not 'all_graphs' in globals():
-        execfile('generate_animal_graphs.py')    
-    
-    if 'gold_graph' not in globals():
-        gold_graph = Graph.Read_Pickle(fname='gHS0.999.igr')
+        l.write('Avg words: {0:.3f} (SD {1:.3f})\n'.format(mean(avg_words),scipy.stats.tstd(avg_words)))
+        l.write('Avg backtracking: {0:.3f}\n'.format(itr-mean(avg_words)))
+        l.write('Avg patch switches: {0:.3f} (SD {1:.3f})\n'.format(mean(avg_patch_switch),scipy.stats.tstd(avg_patch_switch)))
+        l.write('Avg itms/patch: {0:.3f} (SD {1:.3f})\n'.format(mean(avg_itm_ptch),scipy.stats.tstd(avg_itm_ptch)))    
         
-    models = {}#{'gold':gold_graph,'BEAGLE_0.49':get_beagle(0.49)}
+
+
+def has_irt_pattern(irts,binned_final,binned_sem,weak=False):
+    '''Determine whether IRTs conform to the expected pattern observed in human data. If weak = True, use less stringesnt cut-offs for the first and last patch entry positions.
+    Return 2 for yes,
+    1 for yes but weak (see above),
+    0 for no.'''
+    upper = 1.2
+    lower = 0.8
     
-    if 'all_graphs' in globals():
-        models.update(all_graphs)
+    if weak:
+        upper = 1.1
+        lower = 0.9
     
-    weight_opts = {'wrw':True,'rw':False}
-    restarts =  {'restart':0.05,'':0}
-    walk_lengths = [35]
+    lt_average = mean([mean(irt) for irt in irts])
+    lt_sem = scipy.stats.sem([mean(irt)/lt_average for irt in irts])
     
-    #set up multiple plots
-    tot_plts = len(weight_opts)*len(restarts)*len(walk_lengths)
-    x_dim = tot_plts/2
-    y_dim = tot_plts-x_dim
-    #plot_coord = [ [i,j] for i in range(0,x_dim) for j in range(0,y_dim)]
+    #print 'LT_SEM: ' + str(lt_sem)
     
-    #for m in models:
-       # comparative_adjacency_csv(models[m],gold_graph,m)
-    #'''
-    #models ={'BEAGLE_0.1':get_beagle(0.1),'BEAGLE_0.47':get_beagle(0.47),'BEAGLE_0.49':get_beagle(0.49)}
-    for m in models:
-        p=-1        
-        for weight_opt in weight_opts:
-            for rstrt in restarts:
-                for walk_length in walk_lengths:
-                    p+=1
-                    
-                    b=[]
-                    cat=[]
-                    a=[]                    
-            
-                    for i in range(0,282):
-                        title = "_".join([m,str(weight_opt),'282',str(walk_length),'restart '+str(restarts[rstrt]) if rstrt else ''])
-                        
-                        b_i,c_i,a_i = gen_random_walk(g=models[m],weighted=weight_opts[weight_opt],log_file=title,stop=walk_length,restart=restarts[rstrt],name=title)
-                        
-                        b.append(b_i)
-                        #b.append(b_i) #needed since we generate two orders, pos and neg        
-                        cat.append(c_i)
-                        a.append(a_i)
-                        
-                    binned_final,binned_sem = irt_self_longterm_avg(b,cat,multi=True)
-                    
-                    r = [-3,-2,-1,1,2,3,4]
-                    
-                    x = range(0,7)
-                    y = scipy.array([binned_final[i] for i in r])
-                    yerr=[binned_sem[i] for i in r]
-                    f = pylab.figure()
-                    #merge in one figure (not working)
-                    ##pylab.subplot(x_dim,y_dim,p)                    
-                    ax = f.add_axes([0.1, 0.1, 0.8, 0.8])
-                    ax.bar(x, y, align='center')
-                    ax.set_xticks(x)
-                    ax.set_xticklabels(r)
-                    ax.set_xlabel('Patch Entry Position')
-                    ax.set_ylabel('Average IRT/Long-term Average IRT')
-                    ax.set_title(title+' avg-words:'+str(mean([mean(len(z)) for z in a])))
-                    pylab.plot([-1,7],[1,1])        
-                    ax.errorbar(x, y, yerr=yerr, fmt='o')
-                    
-                    precision_recall(models[m],title,title)                    
-                    write_summary(title,a,cat)
-                    
-                    f.show()   
-        #adjacency_names(models[m],title,title)
-        #'''
+    for i,v in binned_final.items():
+        #check if items before patch entry are below 1
+        
+        #we exclude 0 because it represents the last category visited when calculating negative patch entries (i.e. [-1,-2,-3,0,0]
+        if i == 0:
+            continue
+        
+        #print i,v-binned_sem[i]
+        
+        if i == 1:
+            if v+binned_sem[i] < upper:
+                return False
+        elif i in np.arange(-4,3,1): 
+            if v-binned_sem[i] > 1+lt_sem:
+                return False
+            #check that second patch entry item is at least 0.8
+            if i == 2 and v-binned_sem[i] > lower:
+                return False
+        #make sure first patch entry item is at least 1.2
+
+    return True
+
+
+def plot_irt(a,b,cat,title):
+    '''Create a plot of IRTs.'''
+    binned_final,binned_sem = irt_self_longterm_avg(b,cat,multi=True)
+    
+    r = [-3,-2,-1,1,2,3,4]
+    
+    x = range(0,7)
+    #y = scipy.array([binned_final.get(i,None) for i in r])
+    #yerr=[binned_sem.get(i,None) for i in r]
+    y = scipy.array([binned_final.get(i,0) for i in r])
+    yerr=[binned_sem.get(i,0) for i in r]    
+    f = pylab.figure()
+    #merge in one figure (TODO not working)
+    ##pylab.subplot(x_dim,y_dim,p)                    
+    ax = f.add_axes([0.1, 0.1, 0.8, 0.8])
+    ax.bar(x, y, align='center')
+    ax.set_xticks(x)
+    ax.set_xticklabels(r)
+    ax.set_xlabel('Patch Entry Position')
+    ax.set_ylabel('Average IRT/Long-term Average IRT')
+    ax.set_title(title+' avg-words:'+str(mean([mean(a_len(z)) for z in cat])))
+    pylab.plot([-1,7],[1,1])        
+    ax.errorbar(x, y, yerr=yerr, fmt='o')
+    #f.show()
+    f.savefig('irts/'+title+'.png')
+    
+    
+## scrap method for visualizing IRTs on parameter charts. Didn't work very well.
+    
+def annotate_curve_IRTs(fig,xs,ys,zs,prefix):
+    '''Produce 3-dimensional plot with IRTs on graph.'''
+    if not fig:
+        return None
+    #fig = plt.figure()
+    #ax = fig.add_subplot(111, projection = '3d')
+    ax = fig.get_axes()[0]
+    #points = np.array([(1,1,1), (2,2,2)])
+    plotlabels = []
+    #xs, ys, zs = np.split(points, 3, axis=1)
+    #sc = ax.scatter(xs,ys,zs)
+
+    for x, y, z in zip(xs, ys, zs):
+        x2, y2, _ = proj3d.proj_transform(x,y,z, ax.get_proj())
+        
+        ##get image
+        #fn = get_sample_data("grace_hopper.png", asfileobj=False)
+        
+        png_name= '_'.join(prefix+[str(y),'A'+str(x)])
+        
+        arr_lena = read_png('irts/'+png_name+'.png')
+    
+        imagebox = OffsetImage(arr_lena, zoom=0.2)
+                                #
+#
+        ab = AnnotationBbox(imagebox, xy=(x2,y2),
+                            xybox=(100., -60.),
+                            xycoords='data',boxcoords="offset points",   pad=0.5,arrowprops=dict(arrowstyle="->",connectionstyle="angle,angleA=0,angleB=90,rad=3"))    
+        ax.add_artist(ab)
+        
+        ab.draggable()  
+    
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)    
+        #get image
+        
+        label = ab #plt.annotate(
+            #txt, xy = (x2, y2), xytext = (-20, 20),
+            #textcoords = 'offset points', ha = 'right', va = 'bottom',
+            #bbox = dict(boxstyle = 'round,pad=0.5', fc = 'yellow', alpha = 0.5),
+            #arrowprops = dict(arrowstyle = '-', connectionstyle = 'arc3,rad=0'))
+        plotlabels.append(label)
+    fig.canvas.mpl_connect('motion_notify_event', lambda event: update_position(event,fig,ax,zip(plotlabels, xs, ys, zs)))
+    #plt.show()
+
+def update_position(e,fig,ax,labels_and_points):
+    '''Update position of labels on event e. Used by annotate_curve_IRTs.'''
+    for label, x, y, z in labels_and_points:
+        x2, y2, _ = proj3d.proj_transform(x, y, z, ax.get_proj())
+        label.xy = x2,y2
+        label.update_positions(fig.canvas.renderer)
+    fig.canvas.draw()
